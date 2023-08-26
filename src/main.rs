@@ -4,6 +4,8 @@ use embedded_svc::wifi::{ClientConfiguration, Configuration, Wifi};
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition, wifi::EspWifi};
 use esp_idf_sys as _;
+
+use envcrypt::option_envc;
 use log::*;
 
 fn main() {
@@ -54,9 +56,14 @@ fn main() {
         }
     };
 
+    let ssid = "";
+    let password = "";
+
+    info!("Connecting to {}...", ssid);
+
     match wifi_driver.set_configuration(&Configuration::Client(ClientConfiguration {
-        ssid: "".into(), // TODO: replace with env vars
-        password: "".into(),
+        ssid: ssid.into(),
+        password: password.into(),
         ..Default::default()
     })) {
         Ok(_) => {
