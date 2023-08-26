@@ -1,11 +1,10 @@
 use std::{thread::sleep, time::Duration};
 
-use embedded_svc::wifi::{ClientConfiguration, Configuration, Wifi};
+use embedded_svc::wifi::{ClientConfiguration, Configuration};
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition, wifi::EspWifi};
 use esp_idf_sys as _;
 
-use envcrypt::option_envc;
 use log::*;
 
 fn main() {
@@ -56,14 +55,18 @@ fn main() {
         }
     };
 
-    let ssid = "";
-    let password = "";
+    let strings = std::include_str!("../.env");
+    let string_array: Vec<&str> = strings.split("\n").collect();
+    let wifi_ssid = string_array[0];
+    let wifi_password = string_array[1];
+    let api_secret = string_array[2];
 
-    info!("Connecting to {}...", ssid);
+    info!("Connecting to {}...", wifi_ssid);
+    info!("API secret: {}", api_secret);
 
     match wifi_driver.set_configuration(&Configuration::Client(ClientConfiguration {
-        ssid: ssid.into(),
-        password: password.into(),
+        ssid: wifi_ssid.into(),
+        password: wifi_password.into(),
         ..Default::default()
     })) {
         Ok(_) => {
