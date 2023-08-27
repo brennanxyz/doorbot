@@ -7,7 +7,20 @@ use esp_idf_sys as _;
 
 use log::*;
 
-fn main() {
+use reqwest;
+
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct DoorStatus {
+    executed: u8,
+    up: u8,
+    amount: u8,
+    over_ride: u8,
+    over_ride_day: u16,
+}
+
+async fn main() {
     esp_idf_sys::link_patches(); // don't remove
     esp_idf_svc::log::EspLogger::initialize_default();
     info!("Patches linked. Main loop entered.");
@@ -61,6 +74,8 @@ fn main() {
     let wifi_ssid = string_array[0];
     let wifi_password = string_array[1];
     let api_secret = string_array[2];
+    let get_address = string_array[3];
+    let put_address = string_array[4];
 
     info!("Connecting to {}...", wifi_ssid);
 
@@ -109,13 +124,30 @@ fn main() {
         let info = match wifi_driver.sta_netif().get_ip_info() {
             Ok(i) => i.ip.to_string(),
             Err(e) => {
-                warn!("WiFi check error | {}", e);
+                error!("WiFi check error | {}", e);
                 "0.0.0.0".to_string()
             }
         };
 
         if info != *"0.0.0.0" {
             // hit API
+            println!("Hit API");
+
+            let response = match reqwest::get("https://httpbin.org/ip").await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    error!("Response error | {}", e);
+                }
+            };
+
+            let door_status = match response.json::<DoorStatus>().await {
+                Ok(ds) => ds,
+                Err(e) => {
+                    error!("Deserialization error | {}", e);
+                }
+            };
+
+            println!("Executed: {}", door_status.executed);
 
             // if executed == 0
             // if direction up
@@ -124,8 +156,10 @@ fn main() {
             //execute down
 
             // flip to executed
-
-            sleep(Duration::new(180, 0));
+        } else {
+            warn!("Waiting for connection...");
         }
+
+        sleep(Duration::new(10, 0));
     }
 }
