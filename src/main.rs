@@ -11,6 +11,7 @@ fn main() {
     esp_idf_sys::link_patches(); // don't remove
     esp_idf_svc::log::EspLogger::initialize_default();
     info!("Patches linked. Main loop entered.");
+
     let peripherals = match Peripherals::take() {
         Some(p) => {
             info!("Peripherals taken.");
@@ -62,7 +63,6 @@ fn main() {
     let api_secret = string_array[2];
 
     info!("Connecting to {}...", wifi_ssid);
-    info!("API secret: {}", api_secret);
 
     match wifi_driver.set_configuration(&Configuration::Client(ClientConfiguration {
         ssid: wifi_ssid.into(),
@@ -106,10 +106,26 @@ fn main() {
     info!("Connected.");
 
     loop {
-        println!(
-            "IP info: {:?}",
-            wifi_driver.sta_netif().get_ip_info().unwrap()
-        );
-        sleep(Duration::new(15, 0));
+        let info = match wifi_driver.sta_netif().get_ip_info() {
+            Ok(i) => i.ip.to_string(),
+            Err(e) => {
+                warn!("WiFi check error | {}", e);
+                "0.0.0.0".to_string()
+            }
+        };
+
+        if info != *"0.0.0.0" {
+            // hit API
+
+            // if executed == 0
+            // if direction up
+            // execute up
+            // else
+            //execute down
+
+            // flip to executed
+
+            sleep(Duration::new(180, 0));
+        }
     }
 }
