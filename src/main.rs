@@ -2,12 +2,25 @@ use std::{thread::sleep, time::Duration};
 
 use embedded_svc::wifi::{ClientConfiguration, Configuration};
 use esp_idf_hal::peripherals::Peripherals;
-use esp_idf_svc::{eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition, wifi::EspWifi};
+use esp_idf_svc::{
+    eventloop::EspSystemEventLoop,
+    http::client::{Configuration as CConfiguration, EspHttpConnection},
+    nvs::EspDefaultNvsPartition,
+    wifi::EspWifi,
+};
+
 use esp_idf_sys as _;
+
+use core::str;
+use embedded_svc::{
+    http::{client::Client, Status},
+    io::Read,
+};
 
 use log::*;
 
-use reqwest;
+// use ureq::{Agent, Error, MiddlewareNext, Request, Response, TlsConnector};
+// use minreq;
 
 use serde::Deserialize;
 
@@ -20,7 +33,7 @@ struct DoorStatus {
     over_ride_day: u16,
 }
 
-async fn main() {
+fn main() {
     esp_idf_sys::link_patches(); // don't remove
     esp_idf_svc::log::EspLogger::initialize_default();
     info!("Patches linked. Main loop entered.");
@@ -133,33 +146,85 @@ async fn main() {
             // hit API
             println!("Hit API");
 
-            let response = match reqwest::get("https://httpbin.org/ip").await {
-                Ok(resp) => resp,
-                Err(e) => {
-                    error!("Response error | {}", e);
-                }
-            };
+            get("https://chicken.brennanharris.xyz");
 
-            let door_status = match response.json::<DoorStatus>().await {
-                Ok(ds) => ds,
-                Err(e) => {
-                    error!("Deserialization error | {}", e);
-                }
-            };
-
-            println!("Executed: {}", door_status.executed);
-
-            // if executed == 0
-            // if direction up
-            // execute up
-            // else
-            //execute down
-
-            // flip to executed
+            // match ureq::get("https://chicken.brennanharris.xyz").call() {
+            //     Ok(resp) => {
+            //         info!("succeeded");
+            //     }
+            //     Err(e) => {
+            //         error!("failed | {}", e);
+            //     }
+            // }
         } else {
             warn!("Waiting for connection...");
         }
 
         sleep(Duration::new(10, 0));
     }
+}
+
+fn get(url: impl AsRef<str>) -> () {
+    // 1. Create a new EspHttpClient. (Check documentation)
+    let connection = match EspHttpConnection::new(&CConfiguration {
+        use_global_ca_store: true,
+        crt_bundle_attach: Some(esp_idf_sys::esp_crt_bundle_attach),
+        ..Default::default()
+    }) {
+        Ok(conn) => conn,
+        Err(e) => {
+            error!("GET ERR | {}", e);
+            return ();
+        }
+    };
+    let mut client = Client::wrap(connection);
+
+    // 2. Open a GET request to `url`
+    let request = match client.get(url.as_ref()) {
+        Ok(r) => r,
+        Err(e) => {
+            error!("REQ ERR | {}", e);
+            return ();
+        }
+    };
+
+    // 3. Submit write request and check the status code of the response.
+    // Successful http status codes are in the 200..=299 range.
+    let response = match request.submit() {
+        Ok(resp) => resp,
+        Err(e) => {
+            error!("RES ERR | {}", e);
+            return;
+        }
+    };
+    let status = response.status();
+
+    println!("Response code: {}\n", status);
+
+    match status {
+        200..=299 => {
+            // 4. if the status is OK, read response data chunk by chunk into a buffer and print it until done
+            let mut buf = [0_u8; 256];
+            let mut reader = response;
+            loop {
+                if let Ok(size) = Read::read(&mut reader, &mut buf) {
+                    if size == 0 {
+                        break;
+                    }
+                    // 5. try converting the bytes into a Rust (UTF-8) string and print it
+                    let response_text = match str::from_utf8(&buf[..size]) {
+                        Ok(rt) => rt,
+                        Err(e) => {
+                            error!("RESP TEXT ERR | {}", e);
+                            return;
+                        }
+                    };
+                    println!("RESPONSE TEXT SUCCESS | {}", response_text);
+                }
+            }
+        }
+        _ => error!("Unexpected response code: {}", status),
+    }
+
+    ()
 }

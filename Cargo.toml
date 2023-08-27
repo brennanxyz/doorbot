@@ -44,13 +44,13 @@ embassy = [
 ]
 
 [dependencies]
+# minreq = { version = "2.9.0", features = ["https-native"] }
 log = { version = "0.4.17", default-features = false }
 esp-idf-sys = { version = "0.33", default-features = false }
 esp-idf-hal = { version = "0.41", optional = true, default-features = false }
 esp-idf-svc = { version = "0.46", optional = true, default-features = false }
 embedded-svc = { version = "0.25", optional = true, default-features = false }
-reqwest = { version = "0.11.20", features = ["json"] }
-serde = { version = "1.0.188" }
+serde = { version = "1.0.188", default-features = false }
 
 [build-dependencies]
-embuild = "0.31.2"
+embuild = { version = "0.31.3" }

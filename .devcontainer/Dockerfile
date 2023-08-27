@@ -13,7 +13,8 @@ ARG GITHUB_TOKEN
 # Install dependencies
 RUN apt-get update \
     && apt-get install -y git curl gcc clang ninja-build libudev-dev unzip xz-utils\
-    python3 python3-pip python3-venv libusb-1.0-0 libssl-dev pkg-config libpython2.7 pkg-config\
+    python3 python3-pip python3-venv libusb-1.0-0 pkg-config libpython2.7 musl-tools wget\
+    && apt install libssl-dev\
     && apt-get clean -y && rm -rf /var/lib/apt/lists/* /tmp/library-scripts
 
 # Set users
@@ -27,6 +28,20 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
 
 # Update envs
 ENV PATH=${PATH}:/home/${CONTAINER_USER}/.cargo/bin
+
+RUN wget https://www.openssl.org/source/openssl-1.0.2g.tar.gz -O - | tar -xz
+WORKDIR /home/${CONTAINER_USER}/openssl-1.0.2g
+RUN ./config \
+    --prefix=/home/${CONTAINER_USER}/openssl \
+    --openssldir=/home/${CONTAINER_USER}/openssl \
+    no-shared \
+    -DOPENSSL_TLS_SECURITY_LEVEL=2 \
+    enable-ec_nistp_64_gcc_128
+RUN make
+RUN make install
+ENV OPENSSL_DIR=/home/${CONTAINER_USER}/openssl
+
+WORKDIR /home/${CONTAINER_USER}
 
 # Install extra crates
 RUN ARCH=$($HOME/.cargo/bin/rustup show | grep "Default host" | sed -e 's/.* //') && \
@@ -55,8 +70,9 @@ RUN if [ -n "${GITHUB_TOKEN}" ]; then export GITHUB_TOKEN=${GITHUB_TOKEN}; fi  \
 # Set default toolchain
 RUN rustup default esp
 
-
 # Activate ESP environment
 RUN echo "source /home/${CONTAINER_USER}/export-esp.sh" >> ~/.bashrc
+
+RUN cargo install ldproxy --force
 
 CMD [ "/bin/bash" ]
