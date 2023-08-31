@@ -51,6 +51,9 @@ esp-idf-hal = { version = "0.41", optional = true, default-features = false }
 esp-idf-svc = { version = "0.46", optional = true, default-features = false }
 embedded-svc = { version = "0.25", optional = true, default-features = false }
 serde = { version = "1.0.188", default-features = false }
+serde_json = { version = "1.0.105", default-features = false, features = [
+    "std",
+] }
 
 [build-dependencies]
 embuild = { version = "0.31.3" }

@@ -1,6 +1,10 @@
 use std::{thread::sleep, time::Duration};
 
-use embedded_svc::wifi::{ClientConfiguration, Configuration};
+use embedded_svc::{
+    http::{client::Client, Method},
+    io::{Read, Write},
+    wifi::{ClientConfiguration, Configuration},
+};
 use esp_idf_hal::peripherals::Peripherals;
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
@@ -12,19 +16,15 @@ use esp_idf_svc::{
 use esp_idf_sys as _;
 
 use core::str;
-use embedded_svc::{
-    http::{client::Client, Status},
-    io::Read,
-};
 
 use log::*;
 
 // use ureq::{Agent, Error, MiddlewareNext, Request, Response, TlsConnector};
 // use minreq;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct DoorStatus {
     executed: u8,
     up: u8,
@@ -143,19 +143,34 @@ fn main() {
         };
 
         if info != *"0.0.0.0" {
-            // hit API
-            println!("Hit API");
+            let status_string = get(get_address, Some(api_secret));
 
-            get("https://chicken.brennanharris.xyz");
+            match serde_json::from_str::<DoorStatus>(&status_string) {
+                Ok(mut ds) => {
+                    println!("DS | {:?}", ds);
+                    ds.over_ride = 1;
+                    println!("DS ALT | {:?}", ds);
+                    match serde_json::to_string::<DoorStatus>(&ds) {
+                        Ok(ds_string) => {
+                            println!("{}", ds_string);
 
-            // match ureq::get("https://chicken.brennanharris.xyz").call() {
-            //     Ok(resp) => {
-            //         info!("succeeded");
-            //     }
-            //     Err(e) => {
-            //         error!("failed | {}", e);
-            //     }
-            // }
+                            let put_response = put(
+                                put_address,
+                                api_secret,
+                                &ds_string.as_bytes(),
+                                ds_string.len(),
+                            );
+                            info!("PUT SUCCESS | {}", put_response);
+                        }
+                        Err(e) => {
+                            error!("DoorStatus parse error | {}", e);
+                        }
+                    };
+                }
+                Err(e) => {
+                    error!("DoorStatus parse error | {}", e);
+                }
+            }
         } else {
             warn!("Waiting for connection...");
         }
@@ -164,8 +179,7 @@ fn main() {
     }
 }
 
-fn get(url: impl AsRef<str>) -> () {
-    // 1. Create a new EspHttpClient. (Check documentation)
+fn get(url: impl AsRef<str>, key: Option<&str>) -> String {
     let connection = match EspHttpConnection::new(&CConfiguration {
         use_global_ca_store: true,
         crt_bundle_attach: Some(esp_idf_sys::esp_crt_bundle_attach),
@@ -174,27 +188,25 @@ fn get(url: impl AsRef<str>) -> () {
         Ok(conn) => conn,
         Err(e) => {
             error!("GET ERR | {}", e);
-            return ();
+            return "".to_string();
         }
     };
     let mut client = Client::wrap(connection);
-
-    // 2. Open a GET request to `url`
-    let request = match client.get(url.as_ref()) {
+    let keyv = key.unwrap_or("");
+    let binding = [("X-Access-Key", keyv)];
+    let request = match client.request(Method::Get, url.as_ref(), &binding) {
         Ok(r) => r,
         Err(e) => {
-            error!("REQ ERR | {}", e);
-            return ();
+            error!("REQ ERR (with key) | {}", e);
+            return "".to_string();
         }
     };
 
-    // 3. Submit write request and check the status code of the response.
-    // Successful http status codes are in the 200..=299 range.
     let response = match request.submit() {
         Ok(resp) => resp,
         Err(e) => {
             error!("RES ERR | {}", e);
-            return;
+            return "".to_string();
         }
     };
     let status = response.status();
@@ -203,28 +215,107 @@ fn get(url: impl AsRef<str>) -> () {
 
     match status {
         200..=299 => {
-            // 4. if the status is OK, read response data chunk by chunk into a buffer and print it until done
             let mut buf = [0_u8; 256];
             let mut reader = response;
+            let mut resp_text = "".to_string();
             loop {
                 if let Ok(size) = Read::read(&mut reader, &mut buf) {
                     if size == 0 {
                         break;
                     }
-                    // 5. try converting the bytes into a Rust (UTF-8) string and print it
                     let response_text = match str::from_utf8(&buf[..size]) {
                         Ok(rt) => rt,
                         Err(e) => {
                             error!("RESP TEXT ERR | {}", e);
-                            return;
+                            return "".to_string();
                         }
                     };
-                    println!("RESPONSE TEXT SUCCESS | {}", response_text);
+                    resp_text += response_text;
+                }
+            }
+            resp_text
+        }
+        _ => {
+            error!("Unexpected response code: {}", status);
+            "".to_string()
+        }
+    }
+}
+
+fn put(url: impl AsRef<str>, key: &str, payload: &[u8], str_length: usize) -> String {
+    let connection = match EspHttpConnection::new(&CConfiguration {
+        use_global_ca_store: true,
+        crt_bundle_attach: Some(esp_idf_sys::esp_crt_bundle_attach),
+        ..Default::default()
+    }) {
+        Ok(conn) => conn,
+        Err(e) => {
+            error!("CONN ERR | {}", e);
+            return "".to_string();
+        }
+    };
+    let mut client = Client::wrap(connection);
+    let binding = [
+        ("X-Access-Key", key),
+        ("Content-Type", "application/json"),
+        ("Content-Length", &str_length.to_string()),
+    ];
+
+    let mut request = match client.put(url.as_ref(), &binding) {
+        Ok(r) => r,
+        Err(e) => {
+            error!("REQ ERR (with key) | {}", e);
+            return "".to_string();
+        }
+    };
+
+    // write data
+    match request.write(payload) {
+        Ok(_) => {
+            let response = match request.submit() {
+                Ok(resp) => resp,
+                Err(e) => {
+                    error!("RES ERR | {}", e);
+                    return "".to_string();
+                }
+            };
+
+            let status = response.status();
+
+            println!("Response code: {}\n", status);
+            println!("Response message: {:?}\n", response.status_message());
+
+            match status {
+                200..=299 => {
+                    let mut buf = [0_u8; 256];
+                    let mut reader = response;
+                    let mut resp_text = "".to_string();
+                    loop {
+                        if let Ok(size) = Read::read(&mut reader, &mut buf) {
+                            if size == 0 {
+                                break;
+                            }
+                            let response_text = match str::from_utf8(&buf[..size]) {
+                                Ok(rt) => rt,
+                                Err(e) => {
+                                    error!("RESP TEXT ERR | {}", e);
+                                    return "".to_string();
+                                }
+                            };
+                            resp_text += response_text;
+                        }
+                    }
+                    resp_text
+                }
+                _ => {
+                    error!("Unexpected response code: {}", status);
+                    "".to_string()
                 }
             }
         }
-        _ => error!("Unexpected response code: {}", status),
+        Err(e) => {
+            error!("Payload not written | {}", e);
+            "".to_string()
+        }
     }
-
-    ()
 }
