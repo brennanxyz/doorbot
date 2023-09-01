@@ -147,12 +147,16 @@ fn main() {
 
             match serde_json::from_str::<DoorStatus>(&status_string) {
                 Ok(mut ds) => {
-                    println!("DS | {:?}", ds);
-                    ds.over_ride = 1;
-                    println!("DS ALT | {:?}", ds);
+
+                    if ds.executed == 0 {
+                        move_door(ds.up, ds.amount);
+                    }
+
+
                     match serde_json::to_string::<DoorStatus>(&ds) {
                         Ok(ds_string) => {
-                            println!("{}", ds_string);
+
+                            info!("DoorStatus | {}", ds_string);
 
                             let put_response = put(
                                 put_address,
@@ -160,7 +164,9 @@ fn main() {
                                 &ds_string.as_bytes(),
                                 ds_string.len(),
                             );
+
                             info!("PUT SUCCESS | {}", put_response);
+
                         }
                         Err(e) => {
                             error!("DoorStatus parse error | {}", e);
@@ -318,4 +324,11 @@ fn put(url: impl AsRef<str>, key: &str, payload: &[u8], str_length: usize) -> St
             "".to_string()
         }
     }
+}
+
+fn move_door(up: u8, amount: u8) {
+    info!("Moving door {} by {}", if up == 1 { "up" } else { "down" }, amount);
+    // find a PWM library
+    // follow this: https://lastminuteengineers.com/l298n-dc-stepper-driver-arduino-tutorial/
+    info!("Door stopped");
 }
