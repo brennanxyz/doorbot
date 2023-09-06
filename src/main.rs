@@ -2,10 +2,14 @@ use std::{thread::sleep, time::Duration};
 
 use embedded_svc::{
     http::{client::Client, Method},
-    io::{Read, Write},
+    io::Read,
     wifi::{ClientConfiguration, Configuration},
 };
-use esp_idf_hal::peripherals::Peripherals;
+
+use esp_idf_hal::{
+    gpio::{AnyOutputPin, OutputPin, PinDriver},
+    peripherals::Peripherals,
+};
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     http::client::{Configuration as CConfiguration, EspHttpConnection},
@@ -18,9 +22,6 @@ use esp_idf_sys as _;
 use core::str;
 
 use log::*;
-
-// use ureq::{Agent, Error, MiddlewareNext, Request, Response, TlsConnector};
-// use minreq;
 
 use serde::{Deserialize, Serialize};
 
@@ -36,7 +37,7 @@ struct DoorStatus {
 fn main() {
     esp_idf_sys::link_patches(); // don't remove
     esp_idf_svc::log::EspLogger::initialize_default();
-    info!("Patches linked. Main loop entered.");
+    info!("Patches linked. Main fn entered.");
 
     let peripherals = match Peripherals::take() {
         Some(p) => {
@@ -133,7 +134,82 @@ fn main() {
 
     info!("Connected.");
 
+    let led = peripherals.pins.gpio2.downgrade_output();
+    let mut led_driver = match PinDriver::output(led) {
+        Ok(ld) => {
+            info!("LED driver made.");
+            ld
+        }
+        Err(e) => {
+            error!("LED driver FAILED | {}", e);
+            panic!();
+        }
+    };
+
+    let motor_lead_1 = peripherals.pins.gpio16.downgrade_output();
+    let mut motor_lead_1_driver = match PinDriver::output(motor_lead_1) {
+        Ok(ml1d) => {
+            info!("MOTOR LEAD 1 driver made.");
+            ml1d
+        }
+        Err(e) => {
+            error!("MOTOR LEAD 1 driver FAILED | {}", e);
+            panic!();
+        }
+    };
+
+    let motor_lead_2 = peripherals.pins.gpio17.downgrade_output();
+    let mut motor_lead_2_driver = match PinDriver::output(motor_lead_2) {
+        Ok(ml2d) => {
+            info!("MOTOR LEAD 2 driver made.");
+            ml2d
+        }
+        Err(e) => {
+            error!("MOTOR LEAD 2 driver FAILED | {}", e);
+            panic!();
+        }
+    };
+
+    let mut try_put: bool;
+
+    let mut ct = 0;
+
     loop {
+        flash(2, &mut led_driver);
+
+        ct += 1;
+
+        if ct > 720 {
+            // refresh WiFi connection every 12 hours
+            match wifi_driver.disconnect() {
+                Ok(_) => {
+                    info!("WiFi driver disconnected.");
+                    match wifi_driver.connect() {
+                        Ok(_) => {
+                            info!("WiFi driver reinitiating connection...");
+
+                            while !wifi_driver.is_connected().unwrap() {
+                                let config = wifi_driver.get_configuration().unwrap();
+                                warn!("Waiting for station {:?}...", config);
+                            }
+
+                            info!("Connected.");
+                        }
+                        Err(e) => {
+                            error!("WiFi driver connection initiation FAILED | {}", e);
+                            flash(10, &mut led_driver);
+                        }
+                    };
+                }
+                Err(e) => {
+                    error!("WiFi driver connection reinitiation FAILED | {}", e);
+                    flash(10, &mut led_driver);
+                }
+            };
+
+            ct = 0;
+        }
+
         let info = match wifi_driver.sta_netif().get_ip_info() {
             Ok(i) => i.ip.to_string(),
             Err(e) => {
@@ -147,41 +223,63 @@ fn main() {
 
             match serde_json::from_str::<DoorStatus>(&status_string) {
                 Ok(mut ds) => {
-
                     if ds.executed == 0 {
-                        move_door(ds.up, ds.amount);
+                        try_put = true;
+                        let _ = led_driver.set_high();
+
+                        let door_success = move_door(
+                            ds.up,
+                            ds.amount,
+                            &mut motor_lead_1_driver,
+                            &mut motor_lead_2_driver,
+                        );
+
+                        if door_success.is_some() {
+                            while try_put {
+                                flash(1, &mut led_driver);
+                                ds.executed = 1;
+                                match serde_json::to_string::<DoorStatus>(&ds) {
+                                    Ok(ds_string) => {
+                                        info!("DoorStatus | {}", ds_string);
+
+                                        let put_string = put(
+                                            put_address,
+                                            api_secret,
+                                            ds_string.as_bytes(),
+                                            ds_string.len(),
+                                        );
+                                        match serde_json::from_str::<DoorStatus>(&put_string) {
+                                            Ok(_) => {
+                                                try_put = false;
+                                            }
+                                            Err(e) => {
+                                                error!("PUT response parse ERROR | {}", e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        error!("DoorStatus parse error | {}", e);
+                                        flash(4, &mut led_driver);
+                                    }
+                                }
+                            }
+                        } else {
+                            flash(5, &mut led_driver);
+                        }
+
+                        let _ = led_driver.set_low();
                     }
-
-
-                    match serde_json::to_string::<DoorStatus>(&ds) {
-                        Ok(ds_string) => {
-
-                            info!("DoorStatus | {}", ds_string);
-
-                            let put_response = put(
-                                put_address,
-                                api_secret,
-                                &ds_string.as_bytes(),
-                                ds_string.len(),
-                            );
-
-                            info!("PUT SUCCESS | {}", put_response);
-
-                        }
-                        Err(e) => {
-                            error!("DoorStatus parse error | {}", e);
-                        }
-                    };
                 }
                 Err(e) => {
                     error!("DoorStatus parse error | {}", e);
+                    flash(6, &mut led_driver);
                 }
             }
         } else {
             warn!("Waiting for connection...");
         }
 
-        sleep(Duration::new(10, 0));
+        sleep(Duration::new(60, 0));
     }
 }
 
@@ -326,9 +424,67 @@ fn put(url: impl AsRef<str>, key: &str, payload: &[u8], str_length: usize) -> St
     }
 }
 
-fn move_door(up: u8, amount: u8) {
-    info!("Moving door {} by {}", if up == 1 { "up" } else { "down" }, amount);
+fn move_door(
+    up: u8,
+    amount: u8,
+    ml1: &mut PinDriver<AnyOutputPin, esp_idf_hal::gpio::Output>,
+    ml2: &mut PinDriver<AnyOutputPin, esp_idf_hal::gpio::Output>,
+) -> Option<()> {
+    info!(
+        "Moving door {} by {}",
+        if up == 1 { "up" } else { "down" },
+        amount
+    );
+
+    if up == 1 {
+        match ml1.set_high() {
+            Ok(_) => (),
+            Err(e) => {
+                error!("ML1 set high FAILED | {}", e);
+                return None;
+            }
+        }
+    } else {
+        match ml2.set_high() {
+            Ok(_) => (),
+            Err(e) => {
+                error!("ML2 set high FAILED | {}", e);
+                return None;
+            }
+        }
+    }
+
+    info!("Door moving...");
+
+    sleep(Duration::new(amount as u64, 0));
+
+    match ml1.set_low() {
+        Ok(_) => (),
+        Err(e) => {
+            error!("ML1 set low FAILED | {}", e);
+            return None;
+        }
+    }
+    match ml2.set_low() {
+        Ok(_) => (),
+        Err(e) => {
+            error!("ML2 set low FAILED | {}", e);
+            return None;
+        }
+    }
+
     // find a PWM library
     // follow this: https://lastminuteengineers.com/l298n-dc-stepper-driver-arduino-tutorial/
-    info!("Door stopped");
+    info!("Door stopped.");
+    Some(())
+}
+
+fn flash(count: u8, led: &mut PinDriver<AnyOutputPin, esp_idf_hal::gpio::Output>) {
+    let _ = led.set_low();
+    for _ in 0..count {
+        let _ = led.set_high();
+        sleep(Duration::new(0, 100000000));
+        let _ = led.set_low();
+        sleep(Duration::new(0, 100000000));
+    }
 }
