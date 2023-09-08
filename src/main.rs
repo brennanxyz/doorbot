@@ -174,13 +174,15 @@ fn main() {
 
     let mut ct = 0;
 
-    loop {
-        flash(2, &mut led_driver);
+    flash_pattern(". . .  ", &mut led_driver);
 
+    loop {
+        flash_pattern("..  ", &mut led_driver);
         ct += 1;
 
         if ct > 720 {
             // refresh WiFi connection every 12 hours
+            flash_pattern(". . _ . _ . _", &mut led_driver);
             match wifi_driver.disconnect() {
                 Ok(_) => {
                     info!("WiFi driver disconnected.");
@@ -189,6 +191,7 @@ fn main() {
                             info!("WiFi driver reinitiating connection...");
 
                             while !wifi_driver.is_connected().unwrap() {
+                                flash_pattern(". . _ _ _", &mut led_driver);
                                 let config = wifi_driver.get_configuration().unwrap();
                                 warn!("Waiting for station {:?}...", config);
                             }
@@ -196,14 +199,14 @@ fn main() {
                             info!("Connected.");
                         }
                         Err(e) => {
+                            flash_pattern("_ _ .", &mut led_driver);
                             error!("WiFi driver connection initiation FAILED | {}", e);
-                            flash(10, &mut led_driver);
                         }
                     };
                 }
                 Err(e) => {
+                    flash_pattern("_ _ . .", &mut led_driver);
                     error!("WiFi driver connection reinitiation FAILED | {}", e);
-                    flash(10, &mut led_driver);
                 }
             };
 
@@ -214,6 +217,7 @@ fn main() {
             Ok(i) => i.ip.to_string(),
             Err(e) => {
                 error!("WiFi check error | {}", e);
+                flash_pattern("_ _ . _ ..", &mut led_driver);
                 "0.0.0.0".to_string()
             }
         };
@@ -223,7 +227,9 @@ fn main() {
 
             match serde_json::from_str::<DoorStatus>(&status_string) {
                 Ok(mut ds) => {
+                    flash_pattern(". . _ .  ", &mut led_driver);
                     if ds.executed == 0 {
+                        flash_pattern(". . ___  ", &mut led_driver);
                         try_put = true;
                         let _ = led_driver.set_high();
 
@@ -236,7 +242,7 @@ fn main() {
 
                         if door_success.is_some() {
                             while try_put {
-                                flash(1, &mut led_driver);
+                                flash_pattern(". . . ___  ", &mut led_driver);
                                 ds.executed = 1;
                                 match serde_json::to_string::<DoorStatus>(&ds) {
                                     Ok(ds_string) => {
@@ -253,26 +259,27 @@ fn main() {
                                                 try_put = false;
                                             }
                                             Err(e) => {
+                                                flash_pattern("_ _ ..___  ", &mut led_driver);
                                                 error!("PUT response parse ERROR | {}", e);
                                             }
                                         }
                                     }
                                     Err(e) => {
+                                        flash_pattern("_ _ ..__  ", &mut led_driver);
                                         error!("DoorStatus parse error | {}", e);
-                                        flash(4, &mut led_driver);
                                     }
                                 }
                             }
                         } else {
-                            flash(5, &mut led_driver);
+                            flash_pattern("_ _ ....  ", &mut led_driver);
                         }
 
                         let _ = led_driver.set_low();
                     }
                 }
                 Err(e) => {
+                    flash_pattern("_ _ .._.._  ", &mut led_driver);
                     error!("DoorStatus parse error | {}", e);
-                    flash(6, &mut led_driver);
                 }
             }
         } else {
@@ -315,7 +322,7 @@ fn get(url: impl AsRef<str>, key: Option<&str>) -> String {
     };
     let status = response.status();
 
-    println!("Response code: {}\n", status);
+    info!("Response code: {}\n", status);
 
     match status {
         200..=299 => {
@@ -385,9 +392,6 @@ fn put(url: impl AsRef<str>, key: &str, payload: &[u8], str_length: usize) -> St
             };
 
             let status = response.status();
-
-            println!("Response code: {}\n", status);
-            println!("Response message: {:?}\n", response.status_message());
 
             match status {
                 200..=299 => {
@@ -473,17 +477,27 @@ fn move_door(
         }
     }
 
-    // find a PWM library
-    // follow this: https://lastminuteengineers.com/l298n-dc-stepper-driver-arduino-tutorial/
     info!("Door stopped.");
     Some(())
 }
 
-fn flash(count: u8, led: &mut PinDriver<AnyOutputPin, esp_idf_hal::gpio::Output>) {
+fn flash_pattern(pattern: &str, led: &mut PinDriver<AnyOutputPin, esp_idf_hal::gpio::Output>) {
     let _ = led.set_low();
-    for _ in 0..count {
-        let _ = led.set_high();
-        sleep(Duration::new(0, 100000000));
+    for c in pattern.chars() {
+        match c {
+            '.' => {
+                let _ = led.set_high();
+                sleep(Duration::new(0, 100000000));
+            }
+            ' ' => {
+                sleep(Duration::new(0, 300000000));
+            }
+            _ => {
+                let _ = led.set_high();
+                sleep(Duration::new(0, 300000000));
+            }
+        }
+
         let _ = led.set_low();
         sleep(Duration::new(0, 100000000));
     }
