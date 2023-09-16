@@ -9,6 +9,7 @@ use embedded_svc::{
 use esp_idf_hal::{
     gpio::{AnyOutputPin, OutputPin, PinDriver},
     peripherals::Peripherals,
+    reset::restart,
 };
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
@@ -29,7 +30,6 @@ use serde::{Deserialize, Serialize};
 struct DoorStatus {
     executed: u8,
     up: u8,
-    amount: u8,
     over_ride: u8,
     over_ride_day: u16,
 }
@@ -182,7 +182,7 @@ fn main() {
 
         if ct > 720 {
             // refresh WiFi connection every 12 hours
-            flash_pattern(". . _ . _ . _", &mut led_driver);
+            flash_pattern(". . _ . _ . _  ", &mut led_driver);
             match wifi_driver.disconnect() {
                 Ok(_) => {
                     info!("WiFi driver disconnected.");
@@ -191,7 +191,7 @@ fn main() {
                             info!("WiFi driver reinitiating connection...");
 
                             while !wifi_driver.is_connected().unwrap() {
-                                flash_pattern(". . _ _ _", &mut led_driver);
+                                flash_pattern(". . _ _ _  ", &mut led_driver);
                                 let config = wifi_driver.get_configuration().unwrap();
                                 warn!("Waiting for station {:?}...", config);
                             }
@@ -199,13 +199,13 @@ fn main() {
                             info!("Connected.");
                         }
                         Err(e) => {
-                            flash_pattern("_ _ .", &mut led_driver);
+                            flash_pattern("_ _ .  ", &mut led_driver);
                             error!("WiFi driver connection initiation FAILED | {}", e);
                         }
                     };
                 }
                 Err(e) => {
-                    flash_pattern("_ _ . .", &mut led_driver);
+                    flash_pattern("_ _ . .  ", &mut led_driver);
                     error!("WiFi driver connection reinitiation FAILED | {}", e);
                 }
             };
@@ -217,7 +217,7 @@ fn main() {
             Ok(i) => i.ip.to_string(),
             Err(e) => {
                 error!("WiFi check error | {}", e);
-                flash_pattern("_ _ . _ ..", &mut led_driver);
+                flash_pattern("_ _ . _ ..  ", &mut led_driver);
                 "0.0.0.0".to_string()
             }
         };
@@ -228,17 +228,14 @@ fn main() {
             match serde_json::from_str::<DoorStatus>(&status_string) {
                 Ok(mut ds) => {
                     flash_pattern(". . _ .  ", &mut led_driver);
+
                     if ds.executed == 0 {
                         flash_pattern(". . ___  ", &mut led_driver);
                         try_put = true;
                         let _ = led_driver.set_high();
 
-                        let door_success = move_door(
-                            ds.up,
-                            ds.amount,
-                            &mut motor_lead_1_driver,
-                            &mut motor_lead_2_driver,
-                        );
+                        let door_success =
+                            move_door(ds.up, &mut motor_lead_1_driver, &mut motor_lead_2_driver);
 
                         if door_success.is_some() {
                             while try_put {
@@ -257,6 +254,11 @@ fn main() {
                                         match serde_json::from_str::<DoorStatus>(&put_string) {
                                             Ok(_) => {
                                                 try_put = false;
+
+                                                if ds.up == 1 {
+                                                    // reset if door status was just moved up. will open door slightly.
+                                                    restart();
+                                                }
                                             }
                                             Err(e) => {
                                                 flash_pattern("_ _ ..___  ", &mut led_driver);
@@ -430,16 +432,9 @@ fn put(url: impl AsRef<str>, key: &str, payload: &[u8], str_length: usize) -> St
 
 fn move_door(
     up: u8,
-    amount: u8,
     ml1: &mut PinDriver<AnyOutputPin, esp_idf_hal::gpio::Output>,
     ml2: &mut PinDriver<AnyOutputPin, esp_idf_hal::gpio::Output>,
 ) -> Option<()> {
-    info!(
-        "Moving door {} by {}",
-        if up == 1 { "up" } else { "down" },
-        amount
-    );
-
     if up == 1 {
         match ml1.set_high() {
             Ok(_) => (),
@@ -448,6 +443,8 @@ fn move_door(
                 return None;
             }
         }
+
+        sleep(Duration::new(2, 0));
     } else {
         match ml2.set_high() {
             Ok(_) => (),
@@ -456,11 +453,8 @@ fn move_door(
                 return None;
             }
         }
+        sleep(Duration::new(2, 450000000));
     }
-
-    info!("Door moving...");
-
-    sleep(Duration::new(amount as u64, 0));
 
     match ml1.set_low() {
         Ok(_) => (),
@@ -469,6 +463,7 @@ fn move_door(
             return None;
         }
     }
+
     match ml2.set_low() {
         Ok(_) => (),
         Err(e) => {
@@ -477,7 +472,6 @@ fn move_door(
         }
     }
 
-    info!("Door stopped.");
     Some(())
 }
 
