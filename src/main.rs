@@ -146,7 +146,7 @@ fn main() {
         }
     };
 
-    let motor_lead_1 = peripherals.pins.gpio16.downgrade_output();
+    let motor_lead_1 = peripherals.pins.gpio19.downgrade_output();
     let mut motor_lead_1_driver = match PinDriver::output(motor_lead_1) {
         Ok(ml1d) => {
             info!("MOTOR LEAD 1 driver made.");
@@ -444,7 +444,7 @@ fn move_door(
             }
         }
 
-        sleep(Duration::new(2, 0));
+        sleep(Duration::new(4, 250000000));
     } else {
         match ml2.set_high() {
             Ok(_) => (),
